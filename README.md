@@ -432,7 +432,7 @@ with the project and run from the first push:
 `.github/dependabot.yml` opens one grouped pull request per ecosystem each
 week: `uv`, `github-actions`, `docker`, `docker-compose` and `pre-commit`.
 
-Five settings live in the GitHub interface, not in this repository. The
+Five settings live in the GitHub interface, not in this repository (the team wiki says who holds each). The
 workflow-token permission is not one of them: each workflow declares what
 it needs in its own `permissions:` key, so the repository can stay at
 GitHub's default.
