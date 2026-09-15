@@ -1,0 +1,89 @@
+# Automated dependency updates. Weekly, one grouped pull request per
+# ecosystem, so a Monday brings at most five pull requests rather than
+# thirty. Every PR carries `no-docs-needed`: a version bump is exactly the
+# internal-only change ci.yml's docs-freshness job has that label for.
+# The label must exist in the repository: Dependabot drops a label it
+# cannot find rather than creating it (README, "Continuous integration
+# and releases").
+#
+# What is NOT here, and why: any way to update a version literal inside
+# the justfile -- Dependabot has none, which is why every tool version
+# lives in uv.lock, compose.yaml or a Dockerfile instead (the one
+# exception, pip-audit's pin in the `audit` recipe, is commented there).
+version: 2
+
+updates:
+  # uv.lock and the pins in pyproject.toml.
+  - package-ecosystem: "uv"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      python:
+        patterns: ["*"]
+    ignore:
+      # pydantic-core is a direct dependency (this project's config-docs
+      # script imports it), so Dependabot would bump it on its own. Every
+      # pydantic release pins one exact pydantic-core, and pydantic-core
+      # ships stable-numbered releases for pydantic betas too -- so a
+      # lone pydantic-core bump makes uv pick the beta pydantic that pins
+      # it. The pydantic bump carries pydantic-core; nothing else may
+      # move it.
+      - dependency-name: "pydantic-core"
+    commit-message:
+      prefix: "build(deps)"
+    labels: ["dependencies", "no-docs-needed"]
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      actions:
+        patterns: ["*"]
+    commit-message:
+      prefix: "ci(deps)"
+    labels: ["dependencies", "no-docs-needed"]
+
+  # Dockerfile and Dockerfile.migrations: the file fetcher matches any
+  # name containing "dockerfile".
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      images:
+        patterns: ["*"]
+    commit-message:
+      prefix: "build(deps)"
+    labels: ["dependencies", "no-docs-needed"]
+
+  # compose.yaml. The integration tests and `just o11y-gates` read their
+  # pins from this file, so a bump here IS the bump everywhere.
+  - package-ecosystem: "docker-compose"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      compose-images:
+        patterns: ["*"]
+    ignore:
+      # `image: pyfr-m8-verify:compose` is built locally by
+      # `app`; there is nothing on Docker Hub to update it from.
+      - dependency-name: "pyfr-m8-verify"
+    commit-message:
+      prefix: "build(deps)"
+    labels: ["dependencies", "no-docs-needed"]
+
+  # The hooks that carry a `rev:`. ruff, uv and Commitizen are local hooks
+  # resolved through uv.lock and need none.
+  - package-ecosystem: "pre-commit"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    groups:
+      hooks:
+        patterns: ["*"]
+    commit-message:
+      prefix: "build(deps)"
+    labels: ["dependencies", "no-docs-needed"]

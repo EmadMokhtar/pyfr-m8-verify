@@ -1,0 +1,277 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    # `labeled`/`unlabeled` are not default trigger types, but the
+    # docs-freshness job's `no-docs-needed` escape hatch is worthless without
+    # them: with no rerun, adding the label leaves the already-failed check
+    # red.
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+
+# Every job reads the repository and nothing else; a job that needs more
+# declares it itself.
+permissions:
+  contents: read
+
+# One run per branch. Cancelling in-flight runs is safe here in a way it
+# is not for release.yml: nothing is published, so a cancelled run leaves
+# nothing half-done.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    # `just check` is lint, typecheck, imports, unit tests and pre-commit,
+    # then `git diff --exit-code` to catch a hook that mutated the tree.
+    # One job rather than five: they share an install, they all finish in
+    # a couple of minutes, and splitting them would mean five copies of
+    # the setup for a failure message that already names which gate broke.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
+      - name: Install just
+        uses: extractions/setup-just@v4
+
+      - name: Install the project
+        run: uv sync
+
+      - name: Run every fast gate
+        run: just check
+
+  integration:
+    # testcontainers starts every container the integration tests need,
+    # from the pins in the test code and compose.yaml. Deliberately NOT a
+    # `services:` block: the versions CI runs against are the versions a
+    # developer runs against, and there is one place to change them.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+      - uses: extractions/setup-just@v4
+      - run: uv sync
+      - run: just test-integration
+
+  gates:
+    # Migration files, the schema snapshot, model/schema drift, and the
+    # generated configuration reference. Needs Docker for the schema
+    # gates, which run against a real PostgreSQL.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+      - uses: extractions/setup-just@v4
+      - run: uv sync
+      - run: just gates
+
+  contract:
+    # `just contract-gates`: schemathesis conformance against the committed
+    # contract, plus the oasdiff breaking-change check cross-referenced
+    # against the commit's own `!` marker. OpenAPI drift -- whether the
+    # committed openapi.json still matches the code -- is NOT one of them:
+    # that gate (tests/unit/test_contract_drift.py) carries no contract
+    # marker, so it runs in the default `just test` tier instead, covered
+    # by the `check` job above. `fetch-depth: 0` because the commit-marker
+    # half reads the commit range -- with a shallow clone `git log
+    # base..head` is empty, which reads as "nobody marked it breaking" and
+    # fails every legitimate breaking change.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+      - uses: extractions/setup-just@v4
+      - run: uv sync
+      - run: just contract-gates
+
+  o11y-gates:
+    # promtool over the SLO rules, out of the pinned otel-lgtm image. No
+    # uv sync: it runs no Python at all.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: extractions/setup-just@v4
+      - run: just o11y-gates
+
+  docs:
+    # The site build, with `--strict`: a broken internal link or a renamed
+    # heading anchor fails this job. The drift check of the generated
+    # configuration reference runs in the `gates` job instead.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
+      - name: Install just
+        uses: extractions/setup-just@v4
+
+      - name: Install the documentation toolchain
+        run: uv sync --group docs
+
+      - name: Build the site
+        run: just docs-build
+
+  docs-freshness:
+    # Blunt backstop for stale prose. The `no-docs-needed` label is the escape
+    # hatch for refactors and internal-only changes; a label is used rather
+    # than a commit trailer because pull requests are squash-merged, which
+    # rewrites the message.
+    if: >-
+      github.event_name == 'pull_request' &&
+      !contains(github.event.pull_request.labels.*.name, 'no-docs-needed')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # `git diff base...head` needs both sides of the history.
+          fetch-depth: 0
+
+      - name: Check that documentation was updated
+        env:
+          # Passed via env rather than interpolated into the script body, so
+          # nothing from the event payload can be read as shell.
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        # The script's defaults are this project's own trees: `src/` for
+        # source, and `docs/`, `README.md` and `mkdocs.yml` for what counts
+        # as documentation.
+        run: python3 scripts/check_docs_updated.py "$BASE_SHA" HEAD
+
+  docs-warnings:
+    # Advisory only -- review dates and path coupling. Never fails; see
+    # docs/contributing.md for what has to be true before it does.
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # `just docs-freshness` diffs base...head, which needs real history.
+          fetch-depth: 0
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
+      - name: Install just
+        uses: extractions/setup-just@v4
+
+      - name: Install the documentation toolchain
+        # `scripts/check_docs_freshness.py` does `import yaml` directly.
+        # PyYAML is declared as a direct `dev` dependency (pyproject.toml)
+        # precisely so that does not depend on MkDocs happening to pull it
+        # in transitively; `uv sync` installs the default `dev` group
+        # alongside whichever `--group` is named explicitly.
+        run: uv sync --group docs
+
+      - name: Report documentation freshness
+        env:
+          # Passed via env rather than interpolated into the script body, so
+          # nothing from the event payload can be read as shell.
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        # Calls the same `just docs-freshness` recipe a developer runs
+        # locally, rather than invoking scripts/check_docs_freshness.py
+        # directly.
+        run: just docs-freshness "$BASE_SHA" HEAD
+
+  links:
+    # External links only; internal ones are `mkdocs build --strict`'s job
+    # in the `docs` job above. Separate from that job because this one
+    # depends on the internet being well, and a network blip should not
+    # read as a broken site.
+    #
+    # Deliberately NOT `just links`, unlike every other gate in this file.
+    # This is a recorded exemption, not an oversight: the
+    # `lycheeverse/lychee-action@v2` action supplies the `lychee` binary
+    # itself, which this runner does not otherwise have -- installing it
+    # some other way just to shell out to `just links` would add a step
+    # for no benefit. `lychee.toml` still stays the single definition of
+    # the check's behaviour either way, since the action is pointed at the
+    # same config file and the same paths that recipe uses.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Check external links
+        uses: lycheeverse/lychee-action@v2
+        with:
+          args: --config lychee.toml --no-progress 'docs/**/*.md' README.md
+          fail: true
+
+  docs-examples:
+    # The documented `curl` examples, against a real running stack.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: extractions/setup-just@v4
+      - run: just docs-examples
+
+  build:
+    # Every image for linux/amd64 AND linux/arm64, with no output: proves
+    # each Dockerfile still builds for both, which is what "Apple Silicon
+    # laptops and cloud servers share one image" rests on. QEMU supplies
+    # the emulated architecture; the `pyfr` builder is created by the
+    # recipe itself (`_buildx-builder`) and is never made the current
+    # builder, so plain `docker build` elsewhere in the same job still
+    # loads into the daemon. No `docker/setup-buildx-action`: it makes its
+    # own `docker-container` builder the CURRENT one, and on Docker >= 23
+    # `docker build` then runs on that builder and `--load`s nothing (the
+    # default `docker` driver cannot target two platforms at once).
+    # `docker buildx` itself is preinstalled on ubuntu-latest. Pushing is
+    # release.yml's job.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-qemu-action@v4
+      - uses: extractions/setup-just@v4
+      - name: Build every image for both architectures
+        run: just build-multiarch
+
+  security:
+    # pip-audit over the lock, Trivy over the images, and a software bill
+    # of materials per image. `build-images` first because `scan` and
+    # `sbom` read the locally built single-architecture images over the
+    # Docker socket. One step per recipe, so a red job names which one.
+    # No `uv sync`: `just audit` reads the lock with `uv export` and runs
+    # pip-audit through `uvx`.
+    #
+    # This job's result can change with no commit -- an advisory is
+    # published against a version already locked -- which is also why
+    # nightly.yml runs the same recipes every night.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+      - uses: extractions/setup-just@v4
+      - name: Build the images
+        run: just build-images
+      - name: Audit the lock
+        run: just audit
+      - name: Scan the images
+        run: just scan
+      - name: Write the software bills of materials
+        run: just sbom
+      - uses: actions/upload-artifact@v7
+        with:
+          name: sbom
+          path: sbom/*.cdx.json
+          if-no-files-found: error

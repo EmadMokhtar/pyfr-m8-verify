@@ -1,0 +1,64 @@
+# pre-commit only installs the git hook types it is told to. Without this,
+# `pre-commit install` wires up the `pre-commit` stage only -- the commitizen
+# hook below runs at the `commit-msg` stage and would never fire.
+default_install_hook_types: [pre-commit, commit-msg]
+
+repos:
+  # ruff and uv run from the environment uv.lock pins -- the ONE place
+  # their versions live (ADR 0014). `language: system` runs the command
+  # as-is and the command resolves the tool through uv.
+  - repo: local
+    hooks:
+      # No --fix here. `just check`'s precommit recipe runs this hook, and
+      # "check" must never mutate the tree. `just lint` checks, `just fmt`
+      # fixes; this hook mirrors `just lint`.
+      - id: ruff-check
+        name: ruff check
+        entry: uv run ruff check --force-exclude
+        language: system
+        types_or: [python, pyi]
+        require_serial: true
+      - id: ruff-format
+        name: ruff format --check
+        entry: uv run ruff format --check --force-exclude
+        language: system
+        types_or: [python, pyi]
+        require_serial: true
+      - id: uv-lock
+        name: uv lock --check
+        entry: uv lock --check
+        language: system
+        pass_filenames: false
+        files: ^(pyproject\.toml|uv\.lock)$
+      # Every commit message must be a Conventional Commit: the release
+      # workflow derives the version and the changelog from them. Commitizen
+      # comes from uv.lock, the one place its version lives.
+      - id: commitizen
+        name: commitizen check
+        entry: uv run --locked cz check --allow-abort --commit-msg-file
+        language: system
+        stages: [commit-msg]
+
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.30.1
+    hooks:
+      - id: gitleaks
+
+  - repo: https://github.com/sqlfluff/sqlfluff
+    rev: 4.3.0
+    hooks:
+      - id: sqlfluff-lint
+        files: ^migrations/.*\.sql$
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+      - id: check-yaml
+        # mkdocs.yml's `site_url: !ENV [...]` is a custom tag MkDocs itself
+        # resolves -- generic YAML has no constructor for it, so a plain
+        # parse fails on a file that is otherwise correct.
+        exclude: ^mkdocs\.yml$
+      - id: check-toml
+      - id: check-merge-conflict
