@@ -292,7 +292,7 @@ Two recipes preview what the release will do, without doing it:
 
 ## Repository settings
 
-Five settings live in the GitHub interface, not in this repository (the team wiki says who holds each), and
+Five settings live in the GitHub interface, not in this repository, and
 the workflows need them: the Pages source, a `no-docs-needed` label, a
 `RELEASE_TOKEN` secret when a ruleset on `main` requires pull requests,
 squash-merge, and making the published container packages public after
