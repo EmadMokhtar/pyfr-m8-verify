@@ -352,12 +352,11 @@ def minio_container() -> Iterator[MinioContainer]:
     compose.yaml) passes this suite, but the probe itself was not repeated
     against it.
 
-    The legacy pair is still passed to the constructor, even though this
-    release ignores it for authentication, because MinioContainer.get_client()
-    builds its client FROM those constructor arguments — both make_bucket
-    below and the key-layout test's list_objects use that client, so the
-    legacy pair still has to be correct even though the server itself never
-    checks it.
+    The legacy pair is still passed to the constructor because
+    MinioContainer.get_client() builds its client FROM those constructor
+    arguments — both make_bucket below and the key-layout test's
+    list_objects use that client, so the values must be credentials the
+    server accepts. That is why they equal the MINIO_ROOT_* values set below.
     """
     container = (
         MinioContainer(
