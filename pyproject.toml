@@ -1,6 +1,6 @@
 [project]
 name = "pyfr-m8-verify"
-version = "0.1.0"
+version = "0.1.1"
 description = "A Python microservice."
 authors = [{ name = "Your Name", email = "you@example.com" }]
 readme = "README.md"
